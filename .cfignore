@@ -1,0 +1,11 @@
+node_modules/express/
+node_modules/jade/
+node_modules/ws/
+tests/
+README.md
+README/
+launchConfigurations/
+.git/
+.jshintrc
+.project
+.settings/

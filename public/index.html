@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no">
+    <meta charset="utf-8">
+    <title>Tweets On ThE Map</title>
+    <meta name="description" content="A web application hosted on IBM Bluemix
+    that can monitor on a Google Map the results of a twitter query.
+    The application uses WebSocket protocol, which is supported by IBM Bluemix PaaS.">
+    <meta name="keywords" content="bluemix,twitter,tweets,websocket,developerWorks">
+    <meta name="author" content="Michele Crudele">
+    <meta name="title" content="Tweets On ThE Map">
+    <style>
+      html, body, #map-canvas {
+        height: 100%;
+        margin: 0px;
+        padding: 0px
+      }
+      #panel {
+        position: absolute;
+        top: 5px;
+        left: 50%;
+        margin-left: -180px;
+        z-index: 5;
+        background-color: #fff;
+        padding: 5px;
+        border: 1px solid #999;
+      }
+      #panel-monitor {
+        position: absolute;
+        top: 50px;
+        right: 10px;
+        background-color: #fff;
+        padding: 5px;
+        border: 1px solid #999;
+      }
+    </style>
+    <script src="https://maps.googleapis.com/maps/api/js?v=3.exp"></script>
+    <script>
+
+var wssearch;
+var knownLocations = {};
+var locationsOnTheMap = {};
+var map;
+var geocoder;
+var QltMin = 500;
+var QltMax = 120000;
+var qlTimeout = QltMin;
+var ntweets;
+var ntweetsinerror;
+var ntweetsdiscarded;
+var qtime;
+var ptimer;
+var msgq;
+
+// Update stats panel
+//
+function updateStats() {
+  document.getElementById('num-tweets').value = ntweets;
+  document.getElementById('num-tweets-in-error').value = ntweetsinerror;
+  document.getElementById('num-tweets-discarded').value = ntweetsdiscarded;
+  document.getElementById('tweets-per-sec').value = new Number((ntweets * 1000) / (new Date().getTime() - qtime)).toFixed(2);
+}
+
+// Add a delay in writing msgs to the map to mitigate
+// the query_limit error returned by the geocoder service
+// when calling it too frequently.
+//
+function processMsg() {
+  var msg = msgq.shift();
+  if ( msg !== undefined ) {
+    // write to map
+    writeToMap(msg);
+  }
+  updateStats();
+  ptimer = setTimeout(processMsg, qlTimeout);
+}
+
+function initialize() {
+  // Create the map and initialize the geocoder.
+
+  var mapOptions = {
+    zoom: 2,
+    center: new google.maps.LatLng(37.09024, 0),
+    mapTypeId: google.maps.MapTypeId.TERRAIN
+  };
+
+  map = new google.maps.Map(document.getElementById('map-canvas'), mapOptions);
+
+  geocoder = new google.maps.Geocoder();
+}
+
+function dropACircle(loc, tweet) {
+  var address = loc.adr;
+  var geoLatLong = loc.geo;
+  var count = loc.count;
+
+  var circleOptions = {
+        strokeColor: '#FF0000',
+        strokeOpacity: 0.8,
+        strokeWeight: 2,
+        fillColor: '#FF0000',
+        fillOpacity: 0.35,
+        map: map,
+        center: geoLatLong,
+        position: geoLatLong,
+        title: address,
+        radius: 10000 * count
+  };
+
+  var winContent = '<div id="content">'+
+      '<div id="siteNotice">'+
+      '</div>'+
+      '<h1 id="firstHeading" class="firstHeading">' + address + ' (' + count + ')</h1>'+
+      '<div id="bodyContent"><p>' + tweet + '</p>' +
+      '</div>'+
+      '</div>';
+
+  if ( loc.infowin === undefined ) {
+    loc.infowin = new google.maps.InfoWindow({
+        content: winContent
+    });
+  } else {
+    loc.infowin.setContent(winContent);
+  }
+
+  if ( loc.circle ) {
+    loc.circle.setMap(null);
+    loc.circle = null;
+  }
+
+  // Add the circle to the map.
+  loc.circle = new google.maps.Circle(circleOptions);
+
+  // Add a listener for the infowindow
+  google.maps.event.addListener(loc.circle, 'click', function() {
+    loc.infowin.open(map, loc.circle);
+  });
+
+  // Add animation effect: bounce a tweet on the circle
+  var marker = new google.maps.Marker({
+    position: geoLatLong,
+    icon: 'twitter.png',
+    animation: google.maps.Animation.BOUNCE
+  });
+
+  // Bounce 2 seconds
+  marker.setMap(map);
+  setTimeout(function() {
+    marker.setMap(null);
+    marker = null;
+  }, 2000);
+
+  ntweets += 1;
+}
+
+function writeToMap(msg) {
+  // Check known locations first
+  //
+  var address = msg.address;
+  var tweet = msg.text;
+
+  // Don't waste time if tweet location is unset
+  //
+  if ( address.length==0 ) {
+    console.warn('Address not set in tweet. Discarding.');
+    ntweetsinerror+=1;
+
+    // Adjust the timeout of next msg processing
+    if ( qlTimeout > QltMin ) {
+      qlTimeout /= 2;
+    }
+    return;
+  }
+
+  var cloc = knownLocations[address];
+  if ( cloc === undefined ) {
+    geocoder.geocode( { 'address': address}, function(results, status) {
+      if (status == google.maps.GeocoderStatus.OK) {
+        // Save to known locations
+        //
+        var fadr = results[0].formatted_address;
+        knownLocations[address] = fadr;
+        if ( locationsOnTheMap[fadr]===undefined ) {
+          // create the entries
+          locationsOnTheMap[fadr] = {geo: results[0].geometry.location, adr: fadr, count: 1};
+        } else {
+          // entry has been created by another call to geocode, just update it
+          //
+          locationsOnTheMap[fadr].count++;
+        }
+        dropACircle(locationsOnTheMap[fadr], tweet);
+
+        // Adjust the timeout of next msg processing
+        if ( qlTimeout > QltMin ) {
+          qlTimeout /= 2;
+        }
+      } else if ( status == google.maps.GeocoderStatus.OVER_QUERY_LIMIT ) {
+        // Discard the message and slow down processing
+        //
+        ntweetsdiscarded+=1;
+        qlTimeout *= 2;
+        if ( qlTimeout > QltMax ) {
+          alert('Waiting too long on the geocoder service.');
+          qlTimeout = QltMin;
+        }
+      } else {
+        console.warn('Geocode for *' + address + '* was not successful for the following reason: ' + status);
+        ntweetsinerror+=1;
+
+        // Adjust the timeout of next msg processing
+        if ( qlTimeout > QltMin ) {
+          qlTimeout /= 2;
+        }
+      }
+    });
+  } else {
+    console.info('Location *' + address + '* is known. No need to call google geocode service.');
+    locationsOnTheMap[cloc].count++;
+    dropACircle(locationsOnTheMap[cloc], tweet);
+
+    // Adjust the timeout of next msg processing
+    if ( qlTimeout > QltMin ) {
+      qlTimeout /= 2;
+    }
+  }
+}
+
+function onClose(e) {
+  alert('Server closed the connection.\nCode: '
+    + e.code + '\nReason: ' + e.reason + '\nWasClean: ' + e.wasClean);
+
+  stopProcessing();
+}
+
+function onMessage(e) {
+  // Got a tweet, queue for processing
+  //
+  var msg = JSON.parse(e.data);
+  msgq.push(msg);
+}
+
+function onError(e) {
+  // The onClose() is being called shortly
+  //
+  console.error(e);
+}
+
+function onOpen(e) {
+  // Submit the search to the server
+  //
+  var search = document.getElementById('search').value.trim();
+  wssearch.send(search);
+}
+
+// Empty the msgq and clear processMsg() schedule
+//
+function stopProcessing() {
+  msgq = [];
+  if ( ptimer ) {
+    clearInterval(ptimer);
+  }
+}
+
+function startSearch() {
+  var search = document.getElementById('search').value;
+  if ( search.trim().length===0 ) {
+    alert('Cannot submit an empty search.');
+    return;
+  }
+
+  if ( wssearch ) {
+    wssearch.onclose = function() {};
+    wssearch.close();
+  }
+
+  stopProcessing();
+
+  // Clear the map: loop on locationsOnTheMap and remove circles
+  //
+  for (var k in locationsOnTheMap) {
+    locationsOnTheMap[k].count = 0;
+    delete locationsOnTheMap[k].infowin;
+    if ( locationsOnTheMap[k].circle ) {
+      locationsOnTheMap[k].circle.setMap(null);
+    }
+    delete locationsOnTheMap[k].circle;
+  }
+
+  // Reset ptimer
+  //
+  qtime = new Date().getTime();
+  ntweets = 0;
+  ntweetsinerror = 0;
+  ntweetsdiscarded = 0;
+
+  // Create the connection for the new search
+  //
+  if ( window.document.location.host.match(/localhost/) ) {
+    var wsUri = 'ws://' + window.document.location.host + '/search';
+  } else {
+    var wsUri = 'wss://' + window.document.location.host + '/search';
+  }
+  wssearch = new WebSocket(wsUri);
+  wssearch.onopen = function(evt) { onOpen(evt) };
+  wssearch.onclose = function(evt) { onClose(evt) };
+  wssearch.onmessage = function(evt) { onMessage(evt) };
+  wssearch.onerror = function(evt) { onError(evt) };
+
+  alert('Query ' + search + ' sent.\n You should get tweets bouncing on the map shortly.');
+
+  // Start processing messages
+  //
+  processMsg();
+}
+
+google.maps.event.addDomListener(window, 'load', initialize);
+
+    </script>
+  </head>
+  <body>
+    <div id="panel">
+      <input id="search" type="search" title="Write a search, click the Search button, and see what's going on on Twitter! Tips: use OR, AND logical operators for multiple-words query">
+      <input type="button" value="Search" onclick="startSearch()" title="Click to start searching">
+    </div>
+    <div id="map-canvas"></div>
+    <div id="panel-monitor">
+      <div>Tweets on the Map</div>
+      <input id="num-tweets" type="text" readonly title="Number of tweets posted to the map"><br>
+      <div>Tweets in error</div>
+      <input id="num-tweets-in-error" type="text" readonly title="Number of tweets not posted to the map because of invalid location provided"><br>
+      <div>Tweets discarded</div>
+      <input id="num-tweets-discarded" type="text" readonly title="Number of tweets discarded because of errors with the Geocoder service (query limit)"><br>
+      <div>Tweets/secs</div>
+      <input id="tweets-per-sec" type="text" readonly title="Tweets per seconds posted to the map">
+    </div>
+  </body>
+</html>
