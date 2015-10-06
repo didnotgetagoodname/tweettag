@@ -7,13 +7,29 @@ var express = require('express')
   , WebSocketServer = WebSocket.Server
   , TwitterFinder = require('./tfinder');
 
+// Get VCAP Services
+//if (process.env.VCAP_SERVICES) {
+//  // Running on Bluemix. Parse the port and host that we've been assigned.
+//  var cloudantENV = JSON.parse(process.env.VCAP_SERVICES);
+//  var cloudantHOST = process.env.VCAP_APP_HOST;
+//  var cloudantPORT = process.env.VCAP_APP_PORT;
+//  console.log('VCAP_SERVICES: %s', process.env.VCAP_SERVICES);
+//
+//  // Also parse Cloudant settings.
+//  var cloudantSettings = env['cloudantNoSQLDB'][0]['credentials'];
+//  var cloudantUser = cloudantSettings.get("username")
+//  var cloudantPWD = cloudantSettings.get("password")
+//}
 
 // Cloudant
 //
 var host = "localhost";
 var port = 3030;
 var cloudant = {
-		 		 url : "https://adac0b22-7e9b-428d-9c5c-b54223275eed-bluemix:7bfb4aa36dd6e89892b6de7e69b3b81a36961f4d15532db91d02cf2ff848ecaa@adac0b22-7e9b-428d-9c5c-b54223275eed-bluemix.cloudant.com"
+  // From the Bluemix deploymnet of the Cloudant Service
+  // a) Get the URL from Cloudant credentials and replace everything in the line below, between the double quotes, with <URL> value
+  // b) Alternativelly, get the Username, Password and Hostname and replace each
+  url : "https://[CHANGE_THIS_TO_USERNAME]:[CHANGE_THIS_TO_PASSWORD]@[CHANGE_THIS_TO_HOST]"
 };
 
 if (process.env.hasOwnProperty("VCAP_SERVICES")) {
