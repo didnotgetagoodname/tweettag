@@ -1,0 +1,13 @@
+---
+applications:
+- name: [CHANGE_THIS]
+  services:
+  - [CHANGE_THIS]
+  - [CHANGE_THIS]
+  memory: 512M
+  domain: mybluemix.net
+  instances: 1
+  host: [CHANGE_THIS]
+  path: .
+  env:
+    TWITTER_KEYS: '{"consumer_key":"[CHANGE_THIS]","consumer_secret":"[CHANGE_THIS]","access_token_key":"[CHANGE_THIS]","access_token_secret":"[CHANGE_THIS]"}'
